@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -96,12 +95,21 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
+	// 监控pod
 	err = c.Watch(
 		&source.Kind{Type: &corev1.Pod{}},
 		&handler.EnqueueRequestForOwner{
 			IsController: true,
 			OwnerType:    &appsv1.ReplicaSet{},
 		})
+	if err != nil {
+		return err
+	}
+
+	// 监控Service
+	err = c.Watch(
+		&source.Kind{Type: &corev1.Service{}},
+		&handler.EnqueueRequestForObject{})
 	if err != nil {
 		return err
 	}
@@ -126,107 +134,6 @@ type ReconcileHeadlessKind struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=fwzx.geovis.ai,resources=headlesskinds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=fwzx.geovis.ai,resources=headlesskinds/status,verbs=get;update;patch
-func (r *ReconcileHeadlessKind) Reconcile_old(request reconcile.Request) (reconcile.Result, error) {
-	// Fetch the HeadlessKind instance
-	instance := &fwzxv1beta1.HeadlessKind{}
-	err := r.Get(context.TODO(), request.NamespacedName, instance)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// Object not found, return.  Created objects are automatically garbage collected.
-			// For additional cleanup logic use finalizers.
-			return reconcile.Result{}, nil
-		}
-		// Error reading the object - requeue the request.
-		return reconcile.Result{}, err
-	}
-
-	// TODO(user): Change this to be the object type created by your controller
-	// Define the desired Deployment object
-	i := int32(1)
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name + "-deployment",
-			Namespace: instance.Namespace,
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &i,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"deployment": instance.Name + "-deployment"},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"deployment": instance.Name + "-deployment"}},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "nginx",
-							Image: "nginx",
-						},
-					},
-				},
-			},
-		},
-	}
-	if err := controllerutil.SetControllerReference(instance, deploy, r.scheme); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// TODO(user): Change this for the object type created by your controller
-	// Check if the Deployment already exists
-	found := &appsv1.Deployment{}
-
-	fmt.Println("instance.Spec.Hope", instance.Spec.Hope)
-	fmt.Println("instance.Spec.Hope", instance.Spec.Hope)
-	fmt.Println("instance.Spec.Hope", instance.Spec.Hope)
-	fmt.Println("instance.Spec.Hope", instance.Spec.Hope)
-
-	err = r.Get(context.TODO(),
-		types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace},
-		found)
-	if err != nil && errors.IsNotFound(err) {
-		log.Info("Creating Deployment", "namespace", deploy.Namespace, "name", deploy.Name)
-		err = r.Create(context.TODO(), deploy)
-		return reconcile.Result{}, err
-	} else if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	var podList corev1.PodList
-	err = r.List(context.TODO(), &client.ListOptions{}, &podList)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	for _, v := range podList.Items {
-		fmt.Println()
-		fmt.Println()
-		fmt.Println()
-		fmt.Println()
-		fmt.Println(v.Kind, v.Name, v.Namespace)
-		for _, cs := range v.Status.ContainerStatuses {
-			if cs.Ready == true {
-				fmt.Println("没有ready的话删除pod。删除svc")
-			}
-		}
-		fmt.Println()
-		fmt.Println()
-		fmt.Println()
-		fmt.Println()
-	}
-
-	// TODO(user): Change this for the object type created by your controller
-	// Update the found object and write the result back if there are any changes
-	if !reflect.DeepEqual(deploy.Spec, found.Spec) {
-		found.Spec = deploy.Spec
-		log.Info("Updating Deployment", "namespace", deploy.Namespace, "name", deploy.Name)
-		err = r.Update(context.TODO(), found)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-	}
-
-	return reconcile.Result{}, nil
-}
-
 func (r *ReconcileHeadlessKind) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	fmt.Println("working.......Reconcile(request reconcile.Request)")
 	instance := &fwzxv1beta1.HeadlessKind{}
@@ -311,6 +218,8 @@ func (r *ReconcileHeadlessKind) Reconcile(request reconcile.Request) (reconcile.
 	for _, pod := range podList.Items {
 		for _, cs := range pod.Status.ContainerStatuses {
 			fmt.Println(pod.Name, cs.Name, cs.Ready)
+			// 没有ready 但是有service的删除
+			// ready 但是没有service的创建
 		}
 	}
 
