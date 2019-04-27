@@ -28,3 +28,7 @@ $ make docker-push IMG=<img-name>
 
 # Deploy the controller manager manifests to the cluster.
 $ make deploy
+
+
+#程序运行监控情况
+http://127.0.0.1:8080/metrics

@@ -24,9 +24,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -36,9 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-	"time"
-
-	kubeinformers "k8s.io/client-go/informers"
 )
 
 var log = logf.Log.WithName("controller")
@@ -79,8 +77,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	// TODO(user): Modify this to be the types you create
-	// Uncomment watch a Deployment created by HeadlessKind - change this for objects you create
+	// 监控deployment
 	err = c.Watch(
 		&source.Kind{Type: &appsv1.Deployment{}},
 		&handler.EnqueueRequestForOwner{
@@ -91,14 +88,20 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	generatedClient := kubernetes.NewForConfigOrDie(mgr.GetConfig())
-	generatedInformers := kubeinformers.NewSharedInformerFactory(generatedClient, time.Minute*30)
+	// 监控deployment
+	err = c.Watch(
+		&source.Kind{Type: &appsv1.Deployment{}},
+		&handler.EnqueueRequestForObject{})
+	if err != nil {
+		return err
+	}
 
 	err = c.Watch(
-		&source.Informer{Informer: generatedInformers.Core().V1().Pods().Informer()},
-		&handler.EnqueueRequestForObject{},
-	)
-
+		&source.Kind{Type: &corev1.Pod{}},
+		&handler.EnqueueRequestForOwner{
+			IsController: true,
+			OwnerType:    &appsv1.ReplicaSet{},
+		})
 	if err != nil {
 		return err
 	}
@@ -123,7 +126,7 @@ type ReconcileHeadlessKind struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=fwzx.geovis.ai,resources=headlesskinds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=fwzx.geovis.ai,resources=headlesskinds/status,verbs=get;update;patch
-func (r *ReconcileHeadlessKind) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+func (r *ReconcileHeadlessKind) Reconcile_old(request reconcile.Request) (reconcile.Result, error) {
 	// Fetch the HeadlessKind instance
 	instance := &fwzxv1beta1.HeadlessKind{}
 	err := r.Get(context.TODO(), request.NamespacedName, instance)
@@ -139,7 +142,7 @@ func (r *ReconcileHeadlessKind) Reconcile(request reconcile.Request) (reconcile.
 
 	// TODO(user): Change this to be the object type created by your controller
 	// Define the desired Deployment object
-	i := int32(3)
+	i := int32(1)
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name + "-deployment",
@@ -221,5 +224,96 @@ func (r *ReconcileHeadlessKind) Reconcile(request reconcile.Request) (reconcile.
 		}
 	}
 
+	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileHeadlessKind) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+	fmt.Println("working.......Reconcile(request reconcile.Request)")
+	instance := &fwzxv1beta1.HeadlessKind{}
+	err := r.Get(context.TODO(), request.NamespacedName, instance)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return reconcile.Result{}, nil
+		}
+		return reconcile.Result{}, err
+	}
+
+	i := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      instance.Name + "-deployment",
+			Namespace: instance.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &i,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"deployment": instance.Name + "-deployment"},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"deployment": instance.Name + "-deployment",
+						"x":          "y",
+					}},
+
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "nginx",
+							Image: "nginx:alpine",
+
+							ReadinessProbe: &corev1.Probe{
+								Handler: corev1.Handler{
+
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/",
+										Port: intstr.IntOrString{IntVal: 80},
+									},
+								},
+								InitialDelaySeconds: 15,
+								TimeoutSeconds:      5,
+								PeriodSeconds:       10,
+								SuccessThreshold:    1,
+								FailureThreshold:    3,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(instance, deploy, r.scheme); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// 找不到 deployment，就创建
+	fmt.Println("寻找headless 的deploy 是否存在", instance.Name)
+	found := appsv1.Deployment{}
+	err = r.Get(context.TODO(),
+		types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace},
+		&found)
+	if err != nil && errors.IsNotFound(err) {
+		err = r.Create(context.TODO(), deploy)
+		return reconcile.Result{}, err
+	}
+
+	podList := corev1.PodList{}
+	err = r.List(context.TODO(), &client.ListOptions{
+		LabelSelector: labels.SelectorFromSet(map[string]string{"x": "y"}),
+		Namespace:     "",
+	}, &podList)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	fmt.Println(len(podList.Items))
+
+	for _, pod := range podList.Items {
+		for _, cs := range pod.Status.ContainerStatuses {
+			fmt.Println(pod.Name, cs.Name, cs.Ready)
+		}
+	}
+
+	fmt.Println(found.Name)
 	return reconcile.Result{}, nil
 }

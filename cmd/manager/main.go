@@ -17,16 +17,12 @@ limitations under the License.
 package main
 
 import (
-	"flag"
-	"k8s.io/client-go/kubernetes"
-	"os"
-	"time"
-
 	"crdDemo/pkg/apis"
 	"crdDemo/pkg/controller"
 	"crdDemo/pkg/webhook"
+	"flag"
+	"os"
 
-	kubeinformers "k8s.io/client-go/informers"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -77,18 +73,6 @@ func main() {
 	if err := webhook.AddToManager(mgr); err != nil {
 		log.Error(err, "unable to register webhooks to the manager")
 		os.Exit(1)
-	}
-
-	generatedClient := kubernetes.NewForConfigOrDie(mgr.GetConfig())
-	generatedInformers := kubeinformers.NewSharedInformerFactory(generatedClient, time.Minute*30)
-
-	err = mgr.Add(manager.RunnableFunc(func(s <-chan struct{}) error {
-		generatedInformers.Start(s)
-		<-s
-		return nil
-	}))
-	if err != nil {
-		log.Error(err, "error Adding InformerFactory to the Manager")
 	}
 
 	// Start the Cmd
